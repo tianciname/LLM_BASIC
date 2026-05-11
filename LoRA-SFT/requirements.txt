@@ -1,0 +1,14 @@
+# 核心依赖
+torch>=2.0.0
+transformers>=4.40.0
+datasets>=2.14.0           # 需支持 List 特征类型，加载 COIG-CQIA 等新数据集
+accelerate>=0.20.0         # 使用 device_map 必须
+tensorboard>=2.8.0         # 训练过程可视化
+matplotlib>=3.5.0          # 评估结果绘图
+pandas>=1.3.0              # 读取评估 summary.csv
+
+# 可选（如需 4-bit 量化训练）
+# bitsandbytes>=0.41.0
+
+# 评估工具（建议单独环境安装，避免与 datasets 冲突）
+# opencompass>=0.2.0

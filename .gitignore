@@ -1,0 +1,27 @@
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 数据集与处理后的数据
+data/
+opencompass_data/
+
+# 模型输出、日志、检查点
+outputs/
+*.pt
+
+# 评估结果
+eval_results/
+
+# IDE 配置
+.vscode/
+
+# 环境变量（含 token）
+.env
+# 如果 token 写在代码里，确保不提交包含 token 的文件
+# 可以在代码中使用环境变量替代
