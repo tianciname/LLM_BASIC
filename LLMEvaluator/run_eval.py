@@ -7,7 +7,6 @@ from tasks.gsm8k_task import GSM8KTask
 from tasks.humaneval_task import HumanEvalTask
 import os
 
-os.environ["HF_TOKEN"] = "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"
 
 def main():
     parser = argparse.ArgumentParser()
