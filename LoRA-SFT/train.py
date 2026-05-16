@@ -7,7 +7,6 @@ from injector import inject_lora
 from dataset import prepare_dataset
 
 # 设置 HuggingFace Token（请替换为你自己的 Token，或通过环境变量传入）
-os.environ["HF_TOKEN"] = "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"
 
 def train():
 

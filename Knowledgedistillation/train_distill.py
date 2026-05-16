@@ -17,7 +17,6 @@ import json
 from typing import Dict, Optional
 import argparse
 from config import *
-os.environ["HF_TOKEN"] = "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"
 # -------------------- 自定义蒸馏Trainer --------------------
 class DistillationTrainer(Trainer):
     def __init__(self, teacher_model, alpha=ALPHA, temperature=TEMPERATURE, *args, **kwargs):
