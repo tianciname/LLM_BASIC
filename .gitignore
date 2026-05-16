@@ -10,11 +10,14 @@ build/
 # 数据集与处理后的数据
 data/
 opencompass_data/
+*.json
+*.jsonl
 
 # 模型输出、日志、检查点
 outputs/
 *.pt
-
+*.jinja
+*.safetensors
 # 评估结果
 eval_results/
 

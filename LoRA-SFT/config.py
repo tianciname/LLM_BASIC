@@ -13,18 +13,21 @@ class LoRAConfig:
 
 @dataclass
 class TrainingConfig:
-    model_name: str = "Qwen/Qwen3.5-0.8B-Base"   # 可换成真实模型
+    model_name: str = "Qwen/Qwen3.5-4B-Base"   # 可换成真实模型
     data_path: str = "m-a-p/COIG-CQIA/chinese_traditional"
     output_dir: str = "outputs"
-    adapter_save_path: str = "outputs/lora_adapter.pt"
-
+    adapter_save_path: str = "outputs/lora_adapter_best.pt"
+    models_path: str = "models" #模型权重存放 
     # 训练超参
-    per_device_batch_size: int = 2
-    gradient_accumulation_steps: int = 8
-    num_epochs: int = 1
+       # … 原有字段 …
+    val_split: float = 0.05       # 验证集比例，0 表示不划分验证集
+    val_steps: int = 10         # 每隔多少 global_step 进行一次验证（若 <=0，则每个 epoch 结束时验证）
+    per_device_batch_size: int = 6
+    gradient_accumulation_steps: int = 4
+    num_epochs: int = 10
     learning_rate: float = 2e-4
-    warmup_steps: int = 50
-    max_seq_length: int = 1024
+    max_seq_length: int = 128
+    warmup_steps: int = 70
     logging_steps: int = 10
     save_steps: int = 500
 

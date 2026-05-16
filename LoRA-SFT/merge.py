@@ -1,20 +1,51 @@
 import torch
+import torch.nn as nn
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from config import LoRAConfig, TrainingConfig
 from injector import inject_lora
+from LoRA import LoRALinear
+def unload_lora(model):
+    """
+    遍历所有模块，将 LoRALinear 替换回 nn.Linear，并恢复合并后的权重。
+    """
+    replace_map = {}
+    for name, module in model.named_modules():
+        if isinstance(module, LoRALinear):
+            replace_map[name] = module
+
+    for full_name, lora_module in replace_map.items():
+        parent_name = ".".join(full_name.split(".")[:-1])
+        attr_name = full_name.split(".")[-1]
+        parent = model.get_submodule(parent_name)
+
+        # 创建普通的 nn.Linear，权重直接使用 lora_module.linear（已经合并了增量）
+        new_linear = nn.Linear(
+            lora_module.in_features,
+            lora_module.out_features,
+            bias=lora_module.linear.bias is not None,
+        )
+        new_linear.weight.data = lora_module.linear.weight.data
+        if lora_module.linear.bias is not None:
+            new_linear.bias.data = lora_module.linear.bias.data
+
+        # 替换
+        setattr(parent, attr_name, new_linear)
+    print(f"Unloaded LoRA from {len(replace_map)} layers.")
 
 def merge_lora():
+
     lora_cfg = LoRAConfig()
     train_cfg = TrainingConfig()
 
-    # 加载基座模型
+    # 1. 加载基座模型（float32）
     model = AutoModelForCausalLM.from_pretrained(
         train_cfg.model_name,
-        torch_dtype=torch.float32,  # 合并时建议用 float32 避免精度损失
+        torch_dtype=torch.float32,
         device_map="auto",
         trust_remote_code=True,
     )
-    # 注入相同的 LoRA 结构（暂时）
+
+    # 2. 注入 LoRA 结构（空壳）
     model, _ = inject_lora(
         model,
         target_modules=lora_cfg.target_modules,
@@ -23,18 +54,19 @@ def merge_lora():
         lora_dropout=0.0,
     )
 
-    # 加载训练好的 adapter 权重
+    # 3. 加载训练好的 LoRA 增量
     adapter_state = torch.load(train_cfg.adapter_save_path, map_location="cpu")
-    # 严格来说，我们只替换了部分模块，需要先将 adapter 权重载入模型
     model.load_state_dict(adapter_state, strict=False)
 
-    # 合并所有权重
+    # 4. 合并权重（数学上把增量融进 linear）
     for module in model.modules():
         if hasattr(module, "merge_weights"):
             module.merge_weights()
 
-    # 移除 LoRA 结构，只保留原始 linear (通过替换回 nn.Linear 较麻烦，简单做法是保存合并后的模型)
-    # 这里直接保存完整模型
+    # 5. 【关键】把 LoRALinear 还原成 nn.Linear
+    unload_lora(model)
+
+    # 6. 保存干净的模型
     tokenizer = AutoTokenizer.from_pretrained(train_cfg.model_name, trust_remote_code=True)
     model.save_pretrained("merged_model")
     tokenizer.save_pretrained("merged_model")
