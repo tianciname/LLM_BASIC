@@ -4,6 +4,7 @@ from datasets import load_dataset
 from tqdm import tqdm
 import os
 
+os.environ["HF_TOKEN"] = "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"
 # -------------------- 配置 --------------------
 # 在这里选择你想要使用的数据集
 USE_DATASETS = {

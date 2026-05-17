@@ -6,9 +6,13 @@ __pycache__/
 dist/
 build/
 *.egg
+*.csv
 
 # 数据集与处理后的数据
 data/
+dataset/
+student_model/
+log/
 opencompass_data/
 *.json
 *.jsonl
