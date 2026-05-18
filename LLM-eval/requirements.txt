@@ -1,7 +1,7 @@
-torch
 transformers
 datasets
-evaluate
-accelerate
-scikit-learn
+matplotlib
+torch
 tqdm
+accelerate
+numpy

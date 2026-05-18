@@ -1,8 +1,9 @@
 import os
 import shutil
-from datasets import load_dataset, load_from_disk, Dataset
+from datasets import load_dataset, load_from_disk
 from transformers import AutoTokenizer
 from config import TrainingConfig
+os.environ["HF_TOKEN"] = "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"
 
 def save_dataset_to_txt(dataset, save_dir, tokenizer, filename="samples.txt", max_samples=None):
     """
@@ -21,19 +22,20 @@ def save_dataset_to_txt(dataset, save_dir, tokenizer, filename="samples.txt", ma
             count += 1
     print(f"Saved {count} samples to {path}")
 
+
 def prepare_dataset(
     data_path,
     tokenizer,
     max_length=TrainingConfig.max_seq_length,
     save_dir="data/processed",
     overwrite=False,
-    packing=True,           # 是否启用打包
     save_txt=True,          # 是否保存可读的 txt 文件
     val_split=0.0,          # 验证集比例，0 表示不划分
 ):
     """
-    加载数据集 → 分词 → 可选打包 → 保存并重新加载。
+    加载数据集 → 分词 → 可选划分训练/验证集 → 保存并重新加载。
     返回 (train_dataset, val_dataset)，val_dataset 可能为 None。
+    注意：移除了 packing 功能，每个样本保持独立，不进行拼接。
     """
     # ================= 1. 加载原始数据集 =================
     print("=" * 50)
@@ -119,33 +121,7 @@ def prepare_dataset(
     )
     print(f"Tokenized dataset created, samples: {len(tokenized_dataset)}")
 
-    # ================= 3. 打包（packing） =================
-    if packing:
-        print("\nStep 2.5: Packing tokenized sequences to max_length...")
-        all_input_ids = []
-        all_labels = []
-        for sample in tokenized_dataset:
-            all_input_ids.extend(sample["input_ids"])
-            all_labels.extend(sample["labels"])
-
-        packed_input_ids = []
-        packed_labels = []
-        for i in range(0, len(all_input_ids), max_length):
-            chunk_input = all_input_ids[i:i+max_length]
-            chunk_label = all_labels[i:i+max_length]
-            if len(chunk_input) < max_length:
-                continue
-            packed_input_ids.append(chunk_input)
-            packed_labels.append(chunk_label)
-
-        packed_dataset = Dataset.from_dict({
-            "input_ids": packed_input_ids,
-            "labels": packed_labels,
-        })
-        print(f"Packed dataset created, samples: {len(packed_dataset)}")
-        tokenized_dataset = packed_dataset
-
-    # ================= 4. 划分训练集/验证集 =================
+    # ================= 3. 划分训练集/验证集（原 Step 3，现无 packing） =================
     if val_split > 0.0:
         print(f"\nStep 3: Splitting dataset (val ratio={val_split})")
         split_dataset = tokenized_dataset.train_test_split(test_size=val_split, seed=42)
@@ -156,7 +132,7 @@ def prepare_dataset(
         train_dataset = tokenized_dataset
         val_dataset = None
 
-    # ================= 5. 保存到磁盘 =================
+    # ================= 4. 保存到磁盘 =================
     print(f"\nStep 4: Saving processed dataset to: {save_dir}")
     if overwrite and os.path.exists(save_dir):
         shutil.rmtree(save_dir)
@@ -174,15 +150,15 @@ def prepare_dataset(
         val_dataset.save_to_disk(val_dir)
         print(f"Val dataset saved to: {val_dir}")
 
-    # ================= 6. 保存可读的 txt 文件 =================
+    # ================= 5. 保存可读的 txt 文件 =================
     if save_txt:
-        print("\nStep 4.5: Saving human-readable txt files...")
+        print("\nStep 5: Saving human-readable txt files...")
         save_dataset_to_txt(train_dataset, train_dir, tokenizer)
         if val_dataset is not None:
             save_dataset_to_txt(val_dataset, val_dir, tokenizer)
 
-    # ================= 7. 从磁盘重新加载 =================
-    print(f"\nStep 5: Loading dataset from disk...")
+    # ================= 6. 从磁盘重新加载 =================
+    print(f"\nStep 6: Loading dataset from disk...")
     loaded_train = load_from_disk(train_dir)
     print(f"Loaded train samples: {len(loaded_train)}")
 

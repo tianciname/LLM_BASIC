@@ -7,20 +7,44 @@ from injector import inject_lora
 from dataset import prepare_dataset
 
 # 设置 HuggingFace Token（请替换为你自己的 Token，或通过环境变量传入）
-
+os.environ["HF_TOKEN"] = "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"
 def train():
 
     # ========== 将 collate_fn 定义在函数内，确保能使用 tokenizer ==========
     def collate_fn(batch):
-        input_ids = torch.stack([torch.tensor(x["input_ids"]) for x in batch])
-        labels = torch.stack([torch.tensor(x["labels"]) for x in batch])
-        # 因为打包后所有样本长度已固定为 max_length，理论上无填充，可直接全1；
-        # 但为了保险，使用 tokenizer.pad_token_id 判断填充位置
-        attention_mask = (input_ids != tokenizer.pad_token_id).long()
+        """
+        动态填充：将批次内样本填充到相同长度。
+        input_ids 填充用 tokenizer.pad_token_id，
+        labels 填充用 -100（在 loss 计算时忽略这些位置）。
+        """
+        # 找到批次内最大长度
+        max_len = max(len(x["input_ids"]) for x in batch)
+        
+        input_ids_list = []
+        labels_list = []
+        attention_mask_list = []
+        
+        for sample in batch:
+            ids = sample["input_ids"]
+            labs = sample["labels"]
+            seq_len = len(ids)
+            pad_len = max_len - seq_len
+            
+            # 右侧填充 input_ids
+            padded_ids = ids + [tokenizer.pad_token_id] * pad_len
+            # labels 填充 -100
+            padded_labels = labs + [-100] * pad_len
+            # attention mask: 实际 token 为 1，填充为 0
+            mask = [1] * seq_len + [0] * pad_len
+            
+            input_ids_list.append(padded_ids)
+            labels_list.append(padded_labels)
+            attention_mask_list.append(mask)
+        
         return {
-            "input_ids": input_ids,
-            "labels": labels,
-            "attention_mask": attention_mask,
+            "input_ids": torch.tensor(input_ids_list, dtype=torch.long),
+            "labels": torch.tensor(labels_list, dtype=torch.long),
+            "attention_mask": torch.tensor(attention_mask_list, dtype=torch.long),
         }
 
     # ========== 阶段 1：解析配置 ==========

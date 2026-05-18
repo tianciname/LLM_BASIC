@@ -18,13 +18,11 @@ class TrainingConfig:
     output_dir: str = "outputs"
     adapter_save_path: str = "outputs/lora_adapter_best.pt"
     models_path: str = "models" #模型权重存放 
-    # 训练超参
-       # … 原有字段 …
     val_split: float = 0.05       # 验证集比例，0 表示不划分验证集
     val_steps: int = 10         # 每隔多少 global_step 进行一次验证（若 <=0，则每个 epoch 结束时验证）
     per_device_batch_size: int = 6
     gradient_accumulation_steps: int = 4
-    num_epochs: int = 10
+    num_epochs: int = 6
     learning_rate: float = 2e-4
     max_seq_length: int = 128
     warmup_steps: int = 70
