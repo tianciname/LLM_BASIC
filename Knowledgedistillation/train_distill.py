@@ -1,9 +1,12 @@
 #!/usr/bin/env python
-# train_distill.py
+# train_distill.py — 知识蒸馏训练 (Teacher → Student)
 
 import os
+import gc
 import torch
 import torch.nn.functional as F
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
 import transformers
 from transformers import (
     AutoTokenizer,
@@ -14,133 +17,139 @@ from transformers import (
     set_seed,
     TrainerCallback,
 )
+from transformers.trainer_callback import PrinterCallback, ProgressCallback
 from datasets import load_dataset
 import logging
 from config import *
+from trainmon import TrainingMonitor
 
-os.environ["HF_TOKEN"] = "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"
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import setup_hf_token
+setup_hf_token()
 
-# -------------------- 日志净化配置 --------------------
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s", datefmt="%H:%M:%S")
-logger = logging.getLogger(__name__)
+# -------------------- 日志净化：只保留本脚本的输出 --------------------
+logging.basicConfig(level=logging.WARNING, format="%(asctime)s - %(message)s", datefmt="%H:%M:%S")
+for name in ["httpx", "urllib3", "datasets", "transformers", "filelock", "fsspec"]:
+    logging.getLogger(name).setLevel(logging.WARNING)
+transformers.logging.set_verbosity_error()
+# ----------------------------------------------------------------------
 
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("urllib3").setLevel(logging.WARNING)
-transformers.logging.set_verbosity_error() 
-# ------------------------------------------------------
 
-try:
-    from trainmon import TrainingMonitor
-    TRAINMON_AVAILABLE = True
-except ImportError:
-    TRAINMON_AVAILABLE = False
+# -------------------- 蒸馏回调：桥接 Trainer → TrainingMonitor --------------------
+class DistillationCallback(TrainerCallback):
+    """将 Trainer 的 log 事件转发到 TrainingMonitor，附加 KL/CE 分量。"""
 
-# -------------------- 自定义回调：接管日志输出 --------------------
-class TrainMonCallback(TrainerCallback):
-    def __init__(self, monitor):
+    def __init__(self, monitor: TrainingMonitor, trainer: "DistillationTrainer"):
         self.monitor = monitor
+        self.trainer = trainer
 
     def on_log(self, args, state, control, logs=None, **kwargs):
-        if state.global_step > 0 and logs:
-            loss = logs.get('loss', None)
-            lr = logs.get('learning_rate', None)
-            if loss is not None:
-                if self.monitor:
-                    try: self.monitor.log(step=state.global_step, loss=loss, lr=lr)
-                    except: pass
-                max_steps = state.max_steps
-                print(f"[进度: {state.global_step}/{max_steps}] Loss: {loss:.4f} | LR: {lr:.2e}")
+        if state.global_step == 0 or logs is None:
+            return
+
+        loss = logs.get("loss", None)
+        lr = logs.get("learning_rate", None)
+        if loss is None:
+            return
+
+        metrics = {
+            "kl_loss": self.trainer.last_kl_val,
+            "ce_loss": self.trainer.last_ce_val,
+        }
+
+        self.monitor.log(step=state.global_step, loss=loss, lr=lr, metrics=metrics)
 
     def on_train_end(self, args, state, control, **kwargs):
-        print("🎉 训练圆满结束！")
+        pass
 
-# -------------------- 自定义蒸馏Trainer --------------------
+
+# -------------------- 蒸馏 Trainer：KL + CE 联合损失 --------------------
 class DistillationTrainer(Trainer):
     def __init__(self, teacher_model, alpha=ALPHA, temperature=TEMPERATURE, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.teacher_model = teacher_model
         self.alpha = alpha
         self.temperature = temperature
-        
+
         self.teacher_model.eval()
         for param in self.teacher_model.parameters():
             param.requires_grad = False
 
-    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
-        # 彻底抽离 labels
-        labels = inputs.pop("labels", None)
-        
-        # 1. 学生与教师模型前向传播
-        student_outputs = model(**inputs)
-        student_logits = student_outputs.logits
+        # 暴露最近一次的 KL / CE 分量
+        self.last_kl_val = None
+        self.last_ce_val = None
 
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        labels = inputs.pop("labels", None)
+
+        # Teacher forward（无梯度，用完释放）
         with torch.no_grad():
             teacher_outputs = self.teacher_model(**inputs)
             teacher_logits = teacher_outputs.logits
+            del teacher_outputs
+
+        # Student forward
+        student_outputs = model(**inputs)
+        student_logits = student_outputs.logits
 
         if labels is not None:
             inputs["labels"] = labels
 
-        # 2. 准备错位对齐
-        shift_student_logits = student_logits[..., :-1, :].contiguous()
-        shift_teacher_logits = teacher_logits[..., :-1, :].contiguous()
+        # next-token prediction 对齐
+        shift_student = student_logits[..., :-1, :].contiguous()
+        shift_teacher = teacher_logits[..., :-1, :].contiguous()
         shift_labels = labels[..., 1:].contiguous()
         mask = (shift_labels != -100).float()
 
-        # 【显存核心优化】：分块（Chunk）计算 KL 散度与交叉熵，防止超大词表撑爆显存
-        batch_size, seq_len, vocab_size = shift_student_logits.size()
-        flat_student = shift_student_logits.view(-1, vocab_size)
-        flat_teacher = shift_teacher_logits.view(-1, vocab_size)
+        # 展平
+        flat_s = shift_student.view(-1, shift_student.size(-1))
+        flat_t = shift_teacher.view(-1, shift_teacher.size(-1))
         flat_labels = shift_labels.view(-1)
         flat_mask = mask.view(-1)
 
-        total_kl_loss = 0.0
-        total_ce_loss = 0.0
-        total_valid_tokens = flat_mask.sum() + 1e-8
+        valid = flat_mask.nonzero(as_tuple=True)[0]
+        if valid.numel() == 0:
+            self.last_kl_val = 0.0
+            self.last_ce_val = 0.0
+            return (torch.tensor(0.0, device=student_logits.device, requires_grad=True),
+                    student_outputs) if return_outputs else torch.tensor(0.0, device=student_logits.device, requires_grad=True)
 
-        # 每次只计算 1024 个 token 的 Logits，显存开销直降到原本的几分之一
-        chunk_size = 1024
-        total_tokens = flat_student.size(0)
+        s_valid = flat_s[valid]
+        t_valid = flat_t[valid]
+        l_valid = flat_labels[valid]
 
-        for i in range(0, total_tokens, chunk_size):
-            end_idx = min(i + chunk_size, total_tokens)
-            
-            s_chunk = flat_student[i:end_idx]
-            t_chunk = flat_teacher[i:end_idx]
-            l_chunk = flat_labels[i:end_idx]
-            m_chunk = flat_mask[i:end_idx]
+        # KL 散度
+        kl_loss = F.kl_div(
+            F.log_softmax(s_valid / self.temperature, dim=-1),
+            F.softmax(t_valid / self.temperature, dim=-1),
+            reduction='batchmean',
+        ) * (self.temperature ** 2)
 
-            if m_chunk.sum() == 0:
-                continue
+        # CE hard label loss
+        ce_loss = F.cross_entropy(s_valid, l_valid, reduction='mean')
 
-            # 当前块的 KL 散度
-            kl_each = F.kl_div(
-                F.log_softmax(s_chunk / self.temperature, dim=-1),
-                F.softmax(t_chunk / self.temperature, dim=-1),
-                reduction='none',
-            ).sum(dim=-1)
-            total_kl_loss += (kl_each * m_chunk).sum()
+        # 存储分量供回调读取
+        self.last_kl_val = kl_loss.item()
+        self.last_ce_val = ce_loss.item()
 
-            # 当前块的交叉熵
-            ce_each = F.cross_entropy(s_chunk, l_chunk, reduction='none', ignore_index=-100)
-            total_ce_loss += (ce_each * m_chunk).sum()
-
-        # 归一化损失
-        kl_loss = (total_kl_loss / total_valid_tokens) * (self.temperature ** 2)
-        ce_loss = total_ce_loss / total_valid_tokens
-
+        # 合并损失
         loss = self.alpha * kl_loss + (1 - self.alpha) * ce_loss
+
+        del teacher_logits, student_logits
         return (loss, student_outputs) if return_outputs else loss
+
 
 # -------------------- 数据预处理 --------------------
 def format_instruction(example):
-    messages = []
     user_content = example["instruction"]
     if example.get("input") and example["input"].strip():
         user_content += "\n" + example["input"]
-    messages.append({"role": "user", "content": user_content})
-    messages.append({"role": "assistant", "content": example["output"]})
-    return messages
+    return [
+        {"role": "user", "content": user_content},
+        {"role": "assistant", "content": example["output"]},
+    ]
+
 
 def preprocess_function(examples, tokenizer, max_length=MAX_SEQ_LENGTH):
     texts = []
@@ -148,7 +157,7 @@ def preprocess_function(examples, tokenizer, max_length=MAX_SEQ_LENGTH):
         example = {
             "instruction": examples["instruction"][i],
             "input": examples.get("input", [""])[i] if "input" in examples else "",
-            "output": examples["output"][i]
+            "output": examples["output"][i],
         }
         messages = format_instruction(example)
         text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
@@ -157,41 +166,79 @@ def preprocess_function(examples, tokenizer, max_length=MAX_SEQ_LENGTH):
     tokenized["labels"] = tokenized["input_ids"].copy()
     return tokenized
 
+
 def load_and_prepare_dataset(data_path, tokenizer):
     dataset = load_dataset("json", data_files=data_path, split="train")
     dataset = dataset.map(
         lambda x: preprocess_function(x, tokenizer),
         batched=True,
         remove_columns=dataset.column_names,
-        desc="Tokenizing"
+        desc="Tokenizing",
     )
     return dataset
 
-# -------------------- 主训练函数 --------------------
+
+# -------------------- 主函数 --------------------
 def main():
     set_seed(SEED)
-    logger.info("初始化环境与数据集...")
 
+    # ── 初始化监控器 ──
+    monitor = TrainingMonitor(log_dir=OUTPUT_DIR, experiment_name="distill")
+
+    # ── 环境信息 ──
+    if torch.cuda.is_available():
+        total = torch.cuda.get_device_properties(0).total_memory / 1024**3
+        monitor.info(f"GPU: {torch.cuda.get_device_name(0)} | 总量 {total:.1f} GB")
+
+    # ── 加载 Tokenizer ──
     tokenizer = AutoTokenizer.from_pretrained(STUDENT_MODEL_NAME, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # ── 加载数据集 ──
+    monitor.info(f"训练数据: {TRAIN_DATA_PATH}")
     train_dataset = load_and_prepare_dataset(TRAIN_DATA_PATH, tokenizer)
     eval_dataset = load_and_prepare_dataset(EVAL_DATA_PATH, tokenizer) if os.path.exists(EVAL_DATA_PATH) else None
+    monitor.info(f"训练样本: {len(train_dataset)}" + (f" | 验证样本: {len(eval_dataset)}" if eval_dataset else ""))
 
     torch_dtype = torch.bfloat16 if BF16 else (torch.float16 if FP16 else torch.float32)
 
-    logger.info("加载模型到 GPU (静默加载中)...")
+    # ── 加载 Teacher ──
+    monitor.info(f"加载 Teacher: {TEACHER_MODEL_NAME}")
     teacher_model = AutoModelForCausalLM.from_pretrained(
-        TEACHER_MODEL_NAME, torch_dtype=torch_dtype, trust_remote_code=True, device_map="auto", attn_implementation="sdpa"
+        TEACHER_MODEL_NAME,
+        torch_dtype=torch_dtype,
+        trust_remote_code=True,
+        device_map="cuda:0",
+        attn_implementation="sdpa",
     )
+    teacher_model.config.use_cache = False
+    teacher_model.gradient_checkpointing_enable()
+
+    # ── 加载 Student ──
+    monitor.info(f"加载 Student: {STUDENT_MODEL_NAME}")
     student_model = AutoModelForCausalLM.from_pretrained(
-        STUDENT_MODEL_NAME, torch_dtype=torch_dtype, trust_remote_code=True, device_map="auto", attn_implementation="sdpa"
+        STUDENT_MODEL_NAME,
+        torch_dtype=torch_dtype,
+        trust_remote_code=True,
+        device_map="cuda:0",
+        attn_implementation="sdpa",
     )
     student_model.config.use_cache = False
 
-    data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer, model=student_model, padding=True, label_pad_token_id=-100)
+    if torch.cuda.is_available():
+        used = torch.cuda.memory_allocated() / 1024**3
+        monitor.info(f"双模型加载后显存占用: {used:.1f} GB")
 
+    # ── Data Collator ──
+    data_collator = DataCollatorForSeq2Seq(
+        tokenizer=tokenizer,
+        model=student_model,
+        padding=True,
+        label_pad_token_id=-100,
+    )
+
+    # ── 训练参数 ──
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
         num_train_epochs=EPOCHS,
@@ -199,7 +246,7 @@ def main():
         gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS,
         learning_rate=LEARNING_RATE,
         warmup_ratio=WARMUP_RATIO,
-        logging_steps=LOGGING_STEPS, 
+        logging_steps=LOGGING_STEPS,
         save_steps=SAVE_STEPS,
         eval_steps=EVAL_STEPS if eval_dataset else None,
         eval_strategy="steps" if eval_dataset else "no",
@@ -209,20 +256,16 @@ def main():
         remove_unused_columns=False,
         seed=SEED,
         optim="adamw_torch_fused",
-        
-        dataloader_num_workers=4,       
-        dataloader_pin_memory=True,     
-        
+        dataloader_num_workers=0,
+        dataloader_pin_memory=True,
         gradient_checkpointing=True,
         gradient_checkpointing_kwargs={"use_reentrant": False},
-        
-        disable_tqdm=True,      
-        report_to="none",       
-        log_level="error",      
+        disable_tqdm=True,
+        report_to="none",
+        log_level="error",
     )
 
-    monitor = None
-
+    # ── Trainer + 回调 ──
     trainer = DistillationTrainer(
         teacher_model=teacher_model,
         alpha=ALPHA,
@@ -234,13 +277,29 @@ def main():
         data_collator=data_collator,
     )
 
-    trainer.add_callback(TrainMonCallback(monitor))
+    # 移除默认的 PrinterCallback/ProgressCallback，避免其打印原始 dict
+    trainer.remove_callback(PrinterCallback)
+    trainer.remove_callback(ProgressCallback)
 
-    logger.info("正式开始训练！...")
-    trainer.train()
+    callback = DistillationCallback(monitor, trainer)
+    trainer.add_callback(callback)
 
-    trainer.save_model(OUTPUT_DIR)
-    tokenizer.save_pretrained(OUTPUT_DIR)
+    # ── 开始训练 ──
+    monitor.info(f"配置: α={ALPHA} T={TEMPERATURE} | batch={BATCH_SIZE}×{GRADIENT_ACCUMULATION_STEPS} | lr={LEARNING_RATE} | epochs={EPOCHS}")
+    try:
+        trainer.train()
+
+        # ── 保存 ──
+        trainer.save_model(OUTPUT_DIR)
+        tokenizer.save_pretrained(OUTPUT_DIR)
+        monitor.info(f"模型已保存至: {OUTPUT_DIR}")
+    finally:
+        del teacher_model
+        del student_model
+        torch.cuda.empty_cache()
+        gc.collect()
+        monitor.close()
+
 
 if __name__ == "__main__":
     main()

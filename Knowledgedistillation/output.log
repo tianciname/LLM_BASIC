@@ -1,0 +1,14 @@
+nohup: 忽略输入
+============================================================
+实验: distill
+日志: ./student_model/distill_20260519_191740
+============================================================
+TensorBoard: tensorboard --logdir /root/code/LLM_BASIC/Knowledgedistillation/student_model
+  GPU: NVIDIA GeForce RTX 5090 | 总量 31.4 GB
+  训练数据: ./dataset/train.jsonl
+  训练样本: 19000 | 验证样本: 1000
+  加载 Teacher: Qwen/Qwen3.5-4B
+Fetching 2 files:   0%|          | 0/2 [00:00<?, ?it/s]Fetching 2 files: 100%|██████████| 2/2 [00:00<00:00, 43690.67it/s]
+Loading weights:   0%|          | 0/426 [00:00<?, ?it/s]Loading weights:   0%|          | 1/426 [00:00<00:58,  7.28it/s]Loading weights:  11%|█         | 45/426 [00:00<00:01, 225.27it/s]Loading weights:  21%|██        | 89/426 [00:00<00:01, 314.63it/s]Loading weights:  31%|███       | 132/426 [00:00<00:00, 352.18it/s]Loading weights:  41%|████      | 173/426 [00:00<00:00, 364.35it/s]Loading weights:  52%|█████▏    | 221/426 [00:00<00:00, 398.36it/s]Loading weights:  62%|██████▏   | 262/426 [00:00<00:00, 396.75it/s]Loading weights:  72%|███████▏  | 306/426 [00:00<00:00, 405.58it/s]Loading weights:  83%|████████▎ | 355/426 [00:00<00:00, 429.35it/s]Loading weights:  94%|█████████▎| 399/426 [00:01<00:00, 414.89it/s]Loading weights: 100%|██████████| 426/426 [00:01<00:00, 374.35it/s]
+  加载 Student: Qwen/Qwen3.5-0.8B-Base
+Loading weights:   0%|          | 0/320 [00:00<?, ?it/s]Loading weights:   3%|▎         | 10/320 [00:00<00:03, 99.94it/s]Loading weights:  46%|████▋     | 148/320 [00:00<00:00, 845.83it/s]Loading weights:  91%|█████████ | 291/320 [00:00<00:00, 1107.42it/s]Loading weights: 100%|██████████| 320/320 [00:00<00:00, 989.92it/s] 

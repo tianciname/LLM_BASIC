@@ -1,6 +1,6 @@
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from config import MODEL_NAME, DEVICE, MAX_NEW_TOKENS, TEMPERATURE, DO_SAMPLE
+from config import MODEL_NAME, DEVICE, MAX_NEW_TOKENS, DO_SAMPLE
 
 def load_model_and_tokenizer():
     print(f"Loading model: {MODEL_NAME} ...")
@@ -18,9 +18,8 @@ def load_model_and_tokenizer():
 
 def generate_response(model, tokenizer, prompt, model_type, max_new_tokens=MAX_NEW_TOKENS):
     try:
-        messages = [{"role": "user", "content": prompt}]
-        text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=2048).to(DEVICE)
+        # 直接 tokenize prompt，不使用 chat template（base model 不适用）
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048).to(DEVICE)
         gen_kwargs = {
             "max_new_tokens": max_new_tokens,
             "do_sample": DO_SAMPLE,
@@ -28,7 +27,7 @@ def generate_response(model, tokenizer, prompt, model_type, max_new_tokens=MAX_N
             "eos_token_id": tokenizer.eos_token_id,
         }
         if DO_SAMPLE:
-            gen_kwargs["temperature"] = TEMPERATURE
+            gen_kwargs["temperature"] = 0.7
         with torch.no_grad():
             outputs = model.generate(**inputs, **gen_kwargs)
         input_length = inputs["input_ids"].shape[1]

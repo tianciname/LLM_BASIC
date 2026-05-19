@@ -1,97 +1,127 @@
-# 思维链（CoT）提示策略对比与少样本敏感性分析实验总结
+# 思维链（CoT）提示策略对比与少样本敏感性分析
 
 ## 1. 实验目的
-在本地使用 Hugging Face + PyTorch 加载语言模型，系统对比不同思维链（Chain‑of‑Thought）提示策略在多个推理任务上的表现，并重点分析模型对少样本示例的**数量**、**内容**以及**推理步数**的敏感性。
+
+在本地使用 Hugging Face + PyTorch 加载语言模型，系统对比不同思维链（Chain-of-Thought）提示策略在多个推理任务上的表现，并重点分析模型对少样本示例的**数量**、**内容**以及**推理步数**的敏感性。
 
 ## 2. 实验环境与模型
-- 框架：`transformers`、`torch`
-- 模型：可配置的因果语言模型（默认 `gpt2`）或 Seq2Seq 模型（如 `google/flan-t5-base`）
-- 生成设置：`temperature = 0`，`do_sample = False`，保证结果可复现
+
+- 框架：`transformers`、`torch`、`datasets`
+- 模型：可配置的因果语言模型（默认 `Qwen/Qwen1.5-0.5B`）
+- 生成设置：`do_sample = False`（贪婪解码），保证结果可复现
 - 设备：自动选择 GPU（可用时）或 CPU
 
-## 3. 提示策略设计与实现
-共实现 **10 种提示策略**，覆盖无 CoT 基线、零样本 CoT、结构化 CoT 以及 7 种不同的少样本配置（含混合示例与按步数筛选的示例）。所有提示模板和示例均为英文。
+## 3. 项目结构
 
-### 3.1 无 CoT / 零样本 / 结构化
-| 策略名称 | 说明 |
-|----------|------|
-| **Direct** | 直接提问：`"Q: {question}\nA:"` |
-| **Zero‑shot CoT** | 添加思维链触发句：`"A: Let's think step by step."` |
-| **Structured CoT** | 强制输出推理过程后再给出答案：`"Please provide your reasoning step by step, then give the final answer after 'Answer:'"` |
+```
+COT/
+├── main.py                  # 入口：调度实验 + 生成可视化
+├── config.py                # 所有可配置参数
+├── model.py                 # 模型加载与推理
+├── prompts.py               # 4 种提示词构建策略（格式统一）
+├── evaluation.py            # 评估逻辑 + 答案提取 + 结果缓存
+├── data_loader.py           # 数据加载（GSM8K / BoolQ，含步数启发式估算）
+├── visualization.py         # matplotlib 折线图（双任务合并，统一配色）
+├── data/
+│   └── few_shot_examples.json   # 50 个英文手工标注示例池（1~5 步）
+├── tasks/
+│   ├── __init__.py          # 任务注册表
+│   ├── base_task.py         # 抽象基类
+│   ├── arithmetic.py        # 算术任务（GSM8K）
+│   └── commonsense.py       # 常识任务（BoolQ）
+├── experiments/
+│   ├── base_experiment.py           # 实验基类
+│   ├── experiment1_cot_comparison.py # 实验1：CoT 类型对比
+│   ├── experiment2_step_impact.py    # 实验2：示例步数影响
+│   └── experiment3_shot_number.py   # 实验3：Shot 数量 × 步数
+├── output/                   # 结果输出（JSON / TXT / PNG）
+└── .cache/                   # 模型输出缓存（可删除以强制重新推理）
+```
 
-### 3.2 混合示例少样本配置（示例从指定步数范围内随机抽取）
-从内置的 50 个英文示例池中，先按照预设的步数范围（默认为 1~3 步，可通过 `config.py` 中的 `FEW_SHOT_STEP_RANGE` 调整）筛选出候选示例，再随机抽取所需数量。该设计避免因全池步数分布极端影响评估公平性，同时保留示例内容和数量的随机性。
+## 4. 提示策略设计
 
-| 策略名称 | 说明 |
-|----------|------|
-| **Mixed 2‑shot** | 从步数范围（默认 1~3 步）中随机选取 2 个示例 |
-| **Mixed 4‑shot B** | 选取 4 个示例 |
-| **Mixed 6‑shot C** | 选取 6 个示例 |
-| **Mixed 4‑shot D (不同)** | 选取与 B 不同的另外 4 个示例（确保示例内容不同） |
+共实现 **4 种提示策略**，格式统一使用 `Question:` / `Answer:` 前缀：
 
-### 3.3 基于推理步数的少样本配置（示例固定步数，数量为 4）
-| 策略名称 | 示例构成 |
-|----------|----------|
-| **1‑step Only 4‑shot** | 从池中筛选推理步数为 1 的示例，取前 4 个 |
-| **2‑step Only 4‑shot** | 筛选步数为 2 的示例，取前 4 个 |
-| **Multi‑step Only 4‑shot** | 筛选步数 ≥3 的示例，取前 4 个 |
+| 策略 | 模板 |
+|------|------|
+| **Direct** | `Question: {q}\nAnswer:` |
+| **Zero-shot CoT** | `Question: {q}\nAnswer: Let's think step by step.` |
+| **Structured CoT** | 强制要求输出推理过程，以 `Answer:` 后给出最终答案 |
+| **Few-shot CoT** | 从 50 个示例池中选取 k 个 `Question:/Answer:` 对作为前缀 |
 
-- 少样本示例格式：`Q: <示例问题>\nA: <逐步推理>，所以答案是<答案>。`（已全面英文化）
 - 所有少样本示例来自内置的 **50 个英文人工标注样例**，覆盖 1～5 步推理，每步 10 个，涵盖算术、常识、逻辑等类型。
+- Few-shot 示例通过池筛选 + 随机抽取确保多样性。
 
-## 4. 任务与数据
-两个测试任务，测试样本从 Hugging Face 真实数据集**自动下载并抽样**（若下载失败则回退到内置备用样本）。每个样本标注了**推理步数**，支持按步数过滤。
+## 5. 任务与数据
 
-| 任务名称 | 类型 | 数据来源 | 答案形式 | 抽样数量（可配置） |
-|----------|------|----------|----------|-------------------|
-| **Arithmetic** | 数值计算 | GSM8K (train) | 提取的数字答案 | `MATH_SAMPLE_SIZE`（默认 50） |
-| **Commonsense** | 是非判断 | BoolQ (train) | `yes` / `no` | `COMMONSENSE_SAMPLE_SIZE`（默认 50） |
+| 任务 | 类型 | 数据来源 | 答案形式 | 默认抽样数 |
+|------|------|----------|----------|-----------|
+| **Arithmetic** | 数值计算 | GSM8K (train) | 数字 | `MATH_SAMPLE_SIZE=50` |
+| **Commonsense** | 是非判断 | BoolQ (train) | `yes` / `no` | `COMMONSENSE_SAMPLE_SIZE=50` |
 
-- 可通过 `config.py` 中的 `EVAL_STEPS` 变量指定评估的推理步数（如 `1`、`[2,3]` 或 `None` 表示全部），实现**步数定量实验**。
+- GSM8K 步数通过解答文本的推理行数估算。
+- BoolQ 步数通过问题复杂度启发式估算（长度、否定词、从句结构等）。
 
-## 5. 评估方式
-- **评估指标**：精确匹配准确率（Exact Match）
-- **答案提取**：从模型输出中先截断模型自行生成的额外“Q:”内容，再匹配“answer is…”或取最后一句。归一化处理包括转小写、去除标点、将 `true`/`yes` 统一为 `yes`，`false`/`no` 统一为 `no`。
-- **度量**：每个任务、每种策略分别计算总体准确率，并按样本步数统计各步准确率。
-- **日志输出**：每个实验生成一个单独的 `.txt` 日志文件（存放在 `output/` 文件夹），包含完整的实验配置、所有样本的详细推理过程及准确率表格。控制台同步输出。
+## 6. 评估方式
 
-## 6. 敏感性分析核心对比
-实验设置多组关键对比，验证模型对少样本示例的敏感性：
+- **答案提取**：从模型输出中定位 `Answer:` / `answer is` 等标记，提取最终答案部分，避免全文子串匹配的干扰。
+- **数字匹配**：数值归一化后做容差比较（< 0.001），自动忽略单位（yuan, meters, % 等）。
+- **yes/no 匹配**：词边界正则匹配完整单词。
+- **结果缓存**：模型输出按 `(策略, 样本)` 缓存至 `.cache/` 目录，重复运行自动跳过推理。
+- **指标**：精确匹配准确率（Exact Match）。
+- **日志**：每个实验生成独立 `.txt` 日志文件和 `.json` 结果文件。
 
-1. **示例数量 scaling 效应**  
-   比较 Mixed 2‑shot → 4‑shot → 6‑shot 的准确率变化，观察是否随示例增多而提升。
+## 7. 三个实验
 
-2. **示例内容影响**  
-   固定 4‑shot，比较 **Mixed 4‑shot B** 与 **Mixed 4‑shot D (不同)** 的准确率差异，判断示例选择对性能的波动。
+### 实验1：CoT 类型对比
+对比 Direct、Zero-shot CoT、Structured CoT 在随机抽样上的准确率。
 
-3. **示例推理步数影响**  
-   固定 4‑shot，比较 **Mixed 示例**、**1‑step Only**、**2‑step Only**、**Multi‑step Only** 四种配置的准确率，分析示例步数分布对推理性能的作用。
+### 实验2：示例步数影响
+固定 4-shot，变化示例的推理步数（1/2/3/4-step），分析示例步数分布对模型推理的影响，以 Direct 为基线。
 
-4. **步数验证实验**  
-   将上述四种少样本配置分别在测试集的 **1 步**、**2 步**、**多步（3+）**子集上评估，绘制交叉对比表格与柱状图，揭示示例步数与测试步数的匹配效应。
+### 实验3：Shot 数量 × 步数交叉
+固定示例步数（默认 step=4），变化 shot 数量（2/4/6/8/10），分析 shot scaling 效应。
 
-## 7. 输出结果
-- 控制台打印总体准确率对比表格、按推理步数分组对比表格、步数验证对比表格
-- 自动保存为 CSV 文件（`main_results.csv`、`step_verification.csv`）
-- 可视化输出（英文标签，无乱码）：
-  - `cot_comparison.png`：总体准确率柱状图
-  - `cot_step_comparison.png`：各任务按推理步数的准确率柱状图
-  - `step_verification.png`：步数验证实验柱状图（示例步数配置 × 测试步数）
-- 每个实验一个汇总日志文件（`output/main_experiment_*.txt`、`output/step_verification_experiment_*.txt`）
+## 8. 可视化
 
-## 8. 可插拔实验配置
-通过 `config.py` 中的布尔开关独立控制两个实验：
-- `RUN_MAIN_EXPERIMENT = True` → 运行主实验（全部策略评估）
-- `RUN_STEP_VERIFICATION = True` → 运行步数验证实验
+所有图表为**折线图**，两任务合并于同一图中，用不同颜色和线型区分：
 
-可自由组合开启或关闭，无需修改核心代码。
+- **Arithmetic**：暖色 coral (`#E8795A`)，实线 + 圆形标记
+- **Commonsense**：冷色 steel blue (`#5B9BD5`)，虚线 + 方形标记
+- **Direct 基线**：灰色虚线
 
-## 9. 结论要点
-- 比较 Direct 与 Zero‑shot/Few‑shot CoT 可判断思维链提示是否提升推理性能；
-- 示例数量的增加可能带来准确率提升，但存在饱和现象；
-- 示例内容的变化可导致性能波动，表明模型对示例选择敏感；
-- **示例的推理步数分布影响模型表现**：仅含多步示例的少样本提示在复杂推理上可能更优，而仅含简单示例可能在简单题上表现稳定；
-- **步数验证实验**揭示了示例步数与测试步数的匹配效应，为针对性选择少样本示例提供实证依据；
-- Structured CoT 可强制分离推理与答案，在某些任务上更稳定。
+生成的图表：
+- `exp1_comparison.png` — CoT 策略对比
+- `exp2_step_impact.png` — 示例步数影响
+- `exp3_shot_impact.png` — Shot 数量影响
 
-该实验框架可直接替换模型名称、调整示例池或测试数据来源，快速复现与扩展分析，并支持灵活的推理步数过滤与验证。
+## 9. 可配置项
+
+通过 `config.py` 文件调整：
+
+```python
+MODEL_NAME = "Qwen/Qwen1.5-0.5B"   # 模型名称
+MATH_SAMPLE_SIZE = 50               # 算术任务样本数
+COMMONSENSE_SAMPLE_SIZE = 50        # 常识任务样本数
+RUN_EXPERIMENT_1 = True             # 实验1 开关
+RUN_EXPERIMENT_2 = True             # 实验2 开关
+RUN_EXPERIMENT_3 = True             # 实验3 开关
+EXP2_STEPS = [1, 2, 3, 4]          # 实验2 步数列表
+EXP3_STEPS = [4]                    # 实验3 步数
+EXP3_SHOT_COUNTS = [2, 4, 6, 8, 10] # 实验3 shot 数量
+```
+
+## 10. 运行
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+## 11. 结论要点
+
+- CoT 提示（Zero-shot / Few-shot）相比 Direct 通常提升推理准确率。
+- 示例数量增加可能带来提升，但存在饱和现象。
+- 示例的推理步数分布显著影响模型表现：多步示例在复杂推理上更优，简单示例在简单题上更稳定。
+- Structured CoT 强制分离推理与答案，输出更可控。
+- 模型对示例选择敏感，相同 shot 数不同示例可导致性能波动。

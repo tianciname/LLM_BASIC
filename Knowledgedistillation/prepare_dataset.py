@@ -1,10 +1,20 @@
 # prepare_dataset.py
-import json
-from datasets import load_dataset
-from tqdm import tqdm
 import os
 
-os.environ["HF_TOKEN"] = "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"
+# 禁止 C 扩展库的后台线程，避免 Python finalize 时 PyGILState_Release 崩溃
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["OMP_NUM_THREADS"] = "1"
+os.environ["ARROW_NUM_THREADS"] = "1"
+
+import json
+import gc
+from datasets import load_dataset
+from tqdm import tqdm
+
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import setup_hf_token
+setup_hf_token()
 # -------------------- 配置 --------------------
 # 在这里选择你想要使用的数据集
 USE_DATASETS = {
@@ -127,3 +137,6 @@ print(f"Final: {len(final_train_data)} training samples, {len(final_eval_data)} 
 write_jsonl(final_train_data, OUTPUT_TRAIN)
 write_jsonl(final_eval_data, OUTPUT_EVAL)
 print("Data preparation done!")
+
+# 显式清理，防止 Python finalize 时 PyArrow 线程崩溃
+gc.collect()

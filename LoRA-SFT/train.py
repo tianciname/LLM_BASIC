@@ -7,7 +7,10 @@ from injector import inject_lora
 from dataset import prepare_dataset
 
 # 设置 HuggingFace Token（请替换为你自己的 Token，或通过环境变量传入）
-os.environ["HF_TOKEN"] = "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"
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import setup_hf_token
+setup_hf_token()
 def train():
 
     # ========== 将 collate_fn 定义在函数内，确保能使用 tokenizer ==========

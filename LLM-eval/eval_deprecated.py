@@ -11,7 +11,10 @@ import evaluators.humaneval_eval as humaneval_eval
 import evaluators.truthfulqa_eval as truthfulqa_eval
 import evaluators.safety_eval as safety_eval
 
-os.environ["HF_TOKEN"] = "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"
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import setup_hf_token
+setup_hf_token()
 # 1. 屏蔽 Python 的所有 Deprecation 和 User 警告
 warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
 warnings.filterwarnings("ignore", category=DeprecationWarning)

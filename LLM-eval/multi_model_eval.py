@@ -13,10 +13,10 @@ import evaluators.humaneval_eval as humaneval_eval
 import evaluators.truthfulqa_eval as truthfulqa_eval
 import evaluators.safety_eval as safety_eval
 
-os.environ["HF_TOKEN"] = "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"
-
-# 抑制警告（和你的原脚本一致）
-os.environ["HF_TOKEN"] = "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"
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import setup_hf_token
+setup_hf_token()
 warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 os.environ["HF_MODULES_CACHE"] = "ignore"

@@ -3,7 +3,10 @@ import shutil
 from datasets import load_dataset, load_from_disk
 from transformers import AutoTokenizer
 from config import TrainingConfig
-os.environ["HF_TOKEN"] = "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"
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config_loader import setup_hf_token
+setup_hf_token()
 
 def save_dataset_to_txt(dataset, save_dir, tokenizer, filename="samples.txt", max_samples=None):
     """
