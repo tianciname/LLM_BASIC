@@ -1,93 +1,121 @@
 import matplotlib.pyplot as plt
+import matplotlib
 import numpy as np
 
-def plot_results(results, strategy_names, save_path="cot_comparison.png"):
-    """Plot overall accuracy comparison as grouped bar chart."""
-    task_names = list(results.keys())
-    n_tasks = len(task_names)
-    n_strategies = len(strategy_names)
-    x = np.arange(n_tasks)
-    width = 0.8 / n_strategies
+matplotlib.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial']
+matplotlib.rcParams['axes.unicode_minus'] = False
 
-    fig, ax = plt.subplots(figsize=(12, 6))
-    for i, strat in enumerate(strategy_names):
-        acc_values = [results[task][strat] * 100 for task in task_names]
-        bars = ax.bar(x + i * width, acc_values, width, label=strat)
+def plot_exp1_bar(results, save_path="exp1_comparison.png"):
+    """
+    实验1柱状图：两个任务在三个策略上的准确率。
+    results: {task_name: {"Direct": acc, "Zero-shot CoT": acc, "Structured CoT": acc}}
+    """
+    strategies = ["Direct", "Zero-shot CoT", "Structured CoT"]
+    task_names = list(results.keys())
+    n_strategies = len(strategies)
+    n_tasks = len(task_names)
+
+    x = np.arange(n_strategies)
+    width = 0.8 / n_tasks
+    fig, ax = plt.subplots(figsize=(8, 5))
+
+    for i, task in enumerate(task_names):
+        accs = [results[task][s] * 100 for s in strategies]
+        bars = ax.bar(x + i * width, accs, width, label=task)
         for bar in bars:
             height = bar.get_height()
             ax.text(bar.get_x() + bar.get_width()/2., height + 1,
                     f'{height:.1f}%', ha='center', va='bottom', fontsize=8)
 
     ax.set_ylabel('Accuracy (%)')
-    ax.set_title('Comparison of Different CoT Prompting Strategies')
-    ax.set_xticks(x + width * (n_strategies - 1) / 2)
-    ax.set_xticklabels(task_names)
-    ax.legend(loc='upper left', bbox_to_anchor=(1, 1), fontsize='small')
+    ax.set_title('Experiment 1: CoT Strategy Comparison')
+    ax.set_xticks(x + width * (n_tasks - 1) / 2)
+    ax.set_xticklabels(strategies)
+    ax.legend()
     ax.set_ylim(0, 105)
     plt.tight_layout()
     plt.savefig(save_path, dpi=150)
     plt.close()
-    print(f"Overall comparison chart saved to {save_path}")
+    print(f"实验1柱状图已保存至 {save_path}")
 
 
-def plot_step_results(step_results, all_steps, strategy_names, save_path="cot_step_comparison.png"):
-    """Plot accuracy by reasoning step count for each task."""
-    task_names = list(step_results.keys())
-    n_tasks = len(task_names)
-    n_steps = len(all_steps)
-    n_strategies = len(strategy_names)
+def plot_exp2_bar(step_results, save_path_prefix="output/experiment2"):
+    """
+    实验2柱状图：x轴为示例步数，每步两个任务柱状图，Direct 基线为水平虚线。
+    step_results: {task_name: {"baselines": {"Direct": acc, ...}, "few_shot_by_step": {step: acc}}}
+    """
+    import os
+    for task_name, data in step_results.items():
+        baselines = data.get("baselines", {})
+        direct_acc = baselines.get("Direct", 0.0)
+        few_shot = data.get("few_shot_by_step", {})
+        if not few_shot:
+            continue
+        steps = sorted([int(k) for k in few_shot.keys()])
+        accs = [few_shot[str(s)] * 100 for s in steps]
 
-    fig, axes = plt.subplots(1, n_tasks, figsize=(6*n_tasks, 5), squeeze=False)
-    width = 0.8 / n_strategies
+        fig, ax = plt.subplots(figsize=(8, 5))
+        x = np.arange(len(steps))
+        bars = ax.bar(x, accs, width=0.5, color='steelblue', label=f'{task_name} (4-shot)')
+        for bar in bars:
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 1,
+                    f'{height:.1f}%', ha='center', va='bottom', fontsize=8)
 
-    for task_idx, (task_name, ax) in enumerate(zip(task_names, axes[0])):
-        for i, strat in enumerate(strategy_names):
-            accs = [step_results[task_name][strat].get(s, 0.0)*100 for s in all_steps]
-            x_pos = [j + i*width for j in range(n_steps)]
-            bars = ax.bar(x_pos, accs, width, label=strat)
+        # Direct 基线
+        ax.axhline(y=direct_acc * 100, color='red', linestyle='--', linewidth=1.5,
+                   label=f'Direct baseline ({direct_acc:.1%})')
+
+        ax.set_ylabel('Accuracy (%)')
+        ax.set_xlabel('Reasoning steps in few-shot examples')
+        ax.set_title(f'Experiment 2: Step Impact on {task_name}')
+        ax.set_xticks(x)
+        ax.set_xticklabels([f'{s}-step' for s in steps])
+        ax.legend()
+        ax.set_ylim(0, 105)
+        plt.tight_layout()
+        save_path = os.path.join(save_path_prefix, f"{task_name}_step_impact.png")
+        plt.savefig(save_path, dpi=150)
+        plt.close()
+        print(f"实验2柱状图已保存至 {save_path}")
+
+
+def plot_exp3_bar(shot_results, save_path_prefix="output/experiment3"):
+    """
+    实验3柱状图：每种示例步数一张图，x轴为shot数，柱状图为准确率，Direct基线为水平虚线。
+    shot_results: {task_name: {"baselines": {"Direct": acc}, "by_step": {step: {shot: acc}}}}
+    """
+    import os
+    for task_name, data in shot_results.items():
+        baselines = data.get("baselines", {})
+        direct_acc = baselines.get("Direct", 0.0)
+        by_step = data.get("by_step", {})
+        for step_str, shot_dict in by_step.items():
+            step = int(step_str)
+            shots = sorted([int(k) for k in shot_dict.keys()])
+            accs = [shot_dict[str(k)] * 100 for k in shots]
+
+            fig, ax = plt.subplots(figsize=(8, 5))
+            x = np.arange(len(shots))
+            bars = ax.bar(x, accs, width=0.5, color='seagreen',
+                          label=f'{task_name} ({step}-step examples)')
             for bar in bars:
                 height = bar.get_height()
                 ax.text(bar.get_x() + bar.get_width()/2., height + 1,
-                        f'{height:.1f}%', ha='center', va='bottom', fontsize=6)
-        ax.set_title(f'{task_name} Accuracy by Reasoning Steps')
-        ax.set_ylabel('Accuracy (%)')
-        ax.set_xticks([j + width*(n_strategies-1)/2 for j in range(n_steps)])
-        ax.set_xticklabels([f'{s}-step' for s in all_steps])
-        ax.set_ylim(0, 105)
-        ax.legend(loc='upper left', bbox_to_anchor=(1,1), fontsize='x-small')
+                        f'{height:.1f}%', ha='center', va='bottom', fontsize=8)
 
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150)
-    plt.close()
-    print(f"Step-wise comparison chart saved to {save_path}")
+            ax.axhline(y=direct_acc * 100, color='red', linestyle='--', linewidth=1.5,
+                       label=f'Direct baseline ({direct_acc:.1%})')
 
-
-def plot_step_verification(results_matrix, x_labels, strategy_names, save_path="step_verification.png"):
-    """
-    Plot step verification experiment: different few-shot step configurations
-    evaluated on different test step groups.
-    """
-    n_strats = len(strategy_names)
-    n_steps = len(x_labels)
-    x = np.arange(n_steps)
-    width = 0.8 / n_strats
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    for i, strat in enumerate(strategy_names):
-        accs = [results_matrix[strat].get(step, 0.0)*100 for step in x_labels]
-        bars = ax.bar(x + i*width, accs, width, label=strat)
-        for bar in bars:
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height + 1,
-                    f'{height:.1f}%', ha='center', va='bottom', fontsize=8)
-
-    ax.set_ylabel('Accuracy (%)')
-    ax.set_title('Sensitivity to Few-shot Example Steps vs Test Steps')
-    ax.set_xticks(x + width*(n_strats-1)/2)
-    ax.set_xticklabels(x_labels)
-    ax.legend(loc='upper left', bbox_to_anchor=(1,1))
-    ax.set_ylim(0, 105)
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150)
-    plt.close()
-    print(f"Step verification chart saved to {save_path}")
+            ax.set_ylabel('Accuracy (%)')
+            ax.set_xlabel('Number of few-shot examples')
+            ax.set_title(f'Experiment 3: Shot Count Impact ({step}-step examples) on {task_name}')
+            ax.set_xticks(x)
+            ax.set_xticklabels([f'{s} shots' for s in shots])
+            ax.legend()
+            ax.set_ylim(0, 105)
+            plt.tight_layout()
+            save_path = os.path.join(save_path_prefix, f"{task_name}_step{step}_shot_impact.png")
+            plt.savefig(save_path, dpi=150)
+            plt.close()
+            print(f"实验3柱状图已保存至 {save_path}")

@@ -1,24 +1,30 @@
 # 模型与生成参数配置
-MODEL_NAME = "Qwen/Qwen3.5-9B"                # 可替换为 "google/flan-t5-base" 等
+MODEL_NAME = "Qwen/Qwen1.5-0.5B"              
 MAX_NEW_TOKENS = 1024
-TEMPERATURE = 0.0
+TEMPERATURE = 1
 DO_SAMPLE = False
 RANDOM_SEED = 42
 DEVICE = "cuda" if __import__('torch').cuda.is_available() else "cpu"
 
-# ========== 数据集采样配置 ==========
-# 每个任务抽取的样本数量
-MATH_SAMPLE_SIZE = 2           # GSM8K 样本数
-COMMONSENSE_SAMPLE_SIZE = 2    # StrategyQA 样本数
 
-# 混合示例的步数范围（用于随机抽取的候选池），设为 None 则使用全部示例
-FEW_SHOT_STEP_RANGE = [3]   # 示例步数只从1~3步中选取，可根据需要修改
+# 任务样本数量（每个任务从数据集中抽样数）
+MATH_SAMPLE_SIZE = 50
+COMMONSENSE_SAMPLE_SIZE = 50
 
-# 测试集步数过滤：None 表示全部，1 表示仅一步，2 表示两步，3 表示三步……
-# 若要评估多步，可设为 [3,4,5] 等。留空列表或 None 表示全部。
-EVAL_STEPS = [1, 2]       # 例如：None, 1, 2, [1,2], [3,4,5]
+# 实验选择
+RUN_EXPERIMENT_1 = True   # CoT类型对比
+RUN_EXPERIMENT_2 = True   # 不同步数影响
+RUN_EXPERIMENT_3 = True   # 提示词数量影响（步数×shot数）
 
-# 实验开关
-RUN_MAIN_EXPERIMENT = True         # 主实验：全部策略评估 + 总体/步数分组结果
-RUN_STEP_VERIFICATION = True      # 步数验证实验：不同示例步数 vs 测试步数
 
+# 实验2配置：少样本示例步数列表（如 [1,2,3]），将分别评估仅含这些步数的示例
+EXP2_STEPS = [1,2,3,4]   # 每个步数都会生成一种少样本配置
+
+# 实验3配置：步数列表 × 提示词数量列表
+EXP3_STEPS = [4]
+EXP3_SHOT_COUNTS = [2, 4, 6, 8, 10]    # 三种提示词数量
+# 实验3将在每种步数下，变化shot数量，绘制折线图。
+
+
+# 可视化输出格式
+PLOT_FORMAT = 'png'

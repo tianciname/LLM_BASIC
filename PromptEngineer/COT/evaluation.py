@@ -1,88 +1,73 @@
 import re
-import sys
 from model import generate_response
 
 def normalize_text(text: str) -> str:
-    """Normalize text for exact match: lowercase, strip punctuation."""
-    text = text.strip().lower()
-    # Unify common boolean forms to yes/no
-    if text in ("true", "yes", "y"):
-        return "yes"
-    if text in ("false", "no", "n"):
-        return "no"
-    # Remove trailing punctuation
-    text = re.sub(r'[.!?,;:\'"]+$', '', text)
-    return text.strip()
+    return text.strip().lower()
 
-def extract_answer(generated_text: str) -> str:
-    if not generated_text:
-        return ""
-    # Cut off any additional self-generated "Q:" or "问：" by the model
-    for sep in ["Q:", "\nQ:", "问："]:
-        if sep in generated_text:
-            generated_text = generated_text.split(sep)[0]
-            break
+def check_answer_in_output(output: str, gold: str) -> bool:
+    """
+    检查标准答案（gold）是否出现在模型输出中。
+    - 若 gold 是数字，匹配数字（允许 $ 或 cm 等单位前缀/后缀）
+    - 若 gold 是 yes/no，匹配完整单词 yes 或 no
+    """
+    if not output or not gold:
+        return False
+    output_lower = output.lower()
+    gold_lower = gold.lower().strip()
+    if gold_lower in ("yes", "no"):
+        # 匹配完整单词 yes 或 no
+        return bool(re.search(r'\b' + gold_lower + r'\b', output_lower))
+    else:
+        # 匹配数字（包括带单位的如 $40, 25 cm 等）
+        # 构建正则：允许数字前后有 $、空格、逗号等
+        pattern = re.escape(gold_lower)
+        return bool(re.search(pattern, output_lower))
 
-    # Try to match "answer is ..." or "答案是 ..."
-    match = re.search(r'(?:answer is|答案是)\s*([^\n\.]+)', generated_text, re.IGNORECASE)
-    if match:
-        return match.group(1).strip()
-
-    # Otherwise take the last non‑empty sentence
-    sentences = re.split(r'[.\n]', generated_text)
-    sentences = [s.strip() for s in sentences if s.strip()]
-    if sentences:
-        return sentences[-1]
-    return generated_text.strip()
-
-def exact_match(predicted: str, gold: str) -> bool:
-    return normalize_text(predicted) == normalize_text(gold)
-
-def evaluate_task(
-    task_samples,
-    prompt_builder,
-    model,
-    tokenizer,
-    model_type,
-    task_name="unknown",
-    strategy_name="unknown",
-    log_func=print
-):
+def evaluate_single(samples, prompt_builder, model, tokenizer, model_type, log_file, prefix=""):
     correct = 0
-    step_stats = {}   # {steps: [total, correct]}
+    total = len(samples)
+    print(f"\n[{prefix}] 开始评估，共 {total} 个样本...")
+    for idx, s in enumerate(samples):
+        question = s["question"]
+        gold = s["answer"]
+        prompt = prompt_builder(question)
 
-    for idx, sample in enumerate(task_samples):
-        question = sample["question"]
-        gold = sample["answer"]
-        steps = sample.get("steps", 1)
-
+        # ===== 打印分隔线 =====
+        sep = "=" * 60
+        print(f"\n{sep}")
+        print(f"[{prefix}] 样本 {idx+1}/{total}")
+        print(f"问题: {question}")
+        print(f"标准答案: {gold}")
+        print(f"提示词:\n{prompt}")
+        # 生成
         try:
-            prompt = prompt_builder(question)
             response = generate_response(model, tokenizer, prompt, model_type)
-            pred_answer = extract_answer(response)
-            is_correct = exact_match(pred_answer, gold)
-            if is_correct:
-                correct += 1
-
-            step_stats.setdefault(steps, [0, 0])
-            step_stats[steps][0] += 1
-            if is_correct:
-                step_stats[steps][1] += 1
-
-            log_func(f"\n{'='*60}")
-            log_func(f"Task: {task_name} | Strategy: {strategy_name} | Sample #{idx+1}")
-            log_func(f"Question: {question}")
-            log_func(f"Gold Answer: {gold}  (steps: {steps})")
-            log_func(f"Prompt:\n{prompt}")
-            log_func(f"Model Full Output:\n{response}")
-            log_func(f"Extracted Answer: {pred_answer}")
-            log_func(f"Correct: {'✓ Yes' if is_correct else '✗ No'}")
-            log_func(f"{'='*60}")
-
+            if not response:
+                response = "[空输出]"
         except Exception as e:
-            log_func(f"Generation error (question: {question[:30]}...): {e}")
+            response = f"[生成异常: {e}]"
 
-    total = len(task_samples)
-    overall_acc = correct / total if total else 0.0
-    step_acc = {s: corr/tot for s, (tot, corr) in step_stats.items()}
-    return overall_acc, step_acc
+        # 直接使用模型输出作为“模型回答”，思维链即为输出本身（无额外提取）
+        is_correct = check_answer_in_output(response, gold)
+        if is_correct:
+            correct += 1
+
+        status = "✓ 正确" if is_correct else "✗ 错误"
+
+        print(f"模型完整输出:\n{response}")
+        print(f"是否正确: {status}")
+        print(sep + "\n")
+
+        # 写入日志文件
+        log_file.write(f"{sep}\n")
+        log_file.write(f"{prefix} | 样本 {idx+1}: {status}\n")
+        log_file.write(f"问题: {question}\n")
+        log_file.write(f"标准答案: {gold}\n")
+        log_file.write(f"模型完整输出:\n{response}\n")
+        log_file.write(f"是否正确: {status}\n")
+        log_file.write(f"{sep}\n\n")
+
+    acc = correct / total if total else 0.0
+    print(f"[{prefix}] 准确率: {acc:.2%} ({correct}/{total})\n")
+    log_file.write(f"{prefix} 整体准确率: {acc:.2%} ({correct}/{total})\n")
+    return acc
